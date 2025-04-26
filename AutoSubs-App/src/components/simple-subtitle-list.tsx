@@ -16,7 +16,7 @@ export function SubtitleList({ subtitles }: SubtitleListProps) {
   return (
     <ScrollArea className="h-full w-full rounded-md border p-4">
       <Badge variant="destructive" className="absolute right-5 top-4">
-        {(processingStep.includes("Transcribing") || processingStep.includes("Diarizing"))  ? "Preview" : `${subtitles.length} lines`}
+        {(processingStep?.includes("Transcribing") || processingStep?.includes("Diarizing"))  ? "Preview" : `${subtitles.length} lines`}
       </Badge>
       <TooltipProvider>
         <Tooltip>

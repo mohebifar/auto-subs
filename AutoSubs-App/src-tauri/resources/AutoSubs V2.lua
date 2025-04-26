@@ -1,4 +1,4 @@
-local DEV_MODE = false
+local DEV_MODE = true
 
 -- Detect the operating system
 local os_name = ffi.os
@@ -589,6 +589,59 @@ function AddSubtitles(filePath, trackIndex, templateName, textFormat, removePunc
     end
 end
 
+-- Function to add markers based on pre-calculated non-speech segments
+function AddSilenceMarkers(nonSpeechSegments, markInOffset)
+    if not nonSpeechSegments then
+        print("[AutoSubs Server] No non-speech segments data provided.")
+        return false
+    end
+
+    print("[AutoSubs Server] Adding silence markers to timeline...")
+    print("[AutoSubs Server] markInOffset:", markInOffset)
+    local timeline = project:GetCurrentTimeline()
+    local frameRate = timeline:GetSetting("timelineFrameRate")
+    print("[AutoSubs Server] Frame Rate:", frameRate)
+    
+    -- Get timeline bounds for debug
+    local timelineStart = 0
+    -- local timelineStart = timeline:GetStartFrame()
+    local timelineEnd = timeline:GetEndFrame()
+    print("[AutoSubs Server] Timeline range:", timelineStart, "to", timelineEnd)
+    
+    -- IMPORTANT FIX: Make positions relative to start of timeline content, not absolute frames
+    -- Calculate a zero-based timeline position - this will position segments relative to the timeline start
+    -- This makes the segment times (in seconds) align with the visible timeline content
+
+    -- Clear existing silence markers first
+    timeline:DeleteMarkersByColor("Red") -- Assuming Red is used for silence
+
+    for i, segment in ipairs(nonSpeechSegments) do
+        -- Calculate frames using only the segment times, then add to timelineStart
+        -- This places markers at the correct positions relative to the start of timeline content
+        local start_frame = timelineStart + SecondsToFrames(segment["start"], frameRate)
+        local end_frame = timelineStart + SecondsToFrames(segment["end"], frameRate)
+        local duration = end_frame - start_frame
+
+        print("[AutoSubs Server] Segment", i, "- Start:", start_frame, "End:", end_frame, "(Timeline bounds:", timelineStart, "-", timelineEnd, ")")
+
+        -- Add markers only if the silence duration is significant (e.g., > 0.2 seconds)
+        if duration > frameRate * 0.2 then
+            -- Add markers slightly offset to avoid being exactly on a cut if one is made later
+            local offset = 1 
+            local success = timeline:AddMarker(start_frame + offset, "Red", "Silence Start", "", 1, "silence_start_" .. (start_frame + offset))
+            print("[AutoSubs Server] Adding start marker at frame", start_frame + offset, "Success:", success)
+            
+            -- Ensure end marker doesn't overlap start marker if duration is very short
+            if end_frame - offset > start_frame + offset then 
+                local end_success = timeline:AddMarker(end_frame - offset, "Red", "Silence End", "", 1, "silence_end_" .. (end_frame - offset))
+                print("[AutoSubs Server] Adding end marker at frame", end_frame - offset, "Success:", end_success)
+            end
+        end
+    end
+    print("[AutoSubs Server] Finished adding silence markers.")
+    return true
+end
+
 local function set_cors_headers(client)
     client:send("HTTP/1.1 200 OK\r\n")
     client:send("Access-Control-Allow-Origin: *\r\n")
@@ -708,6 +761,26 @@ while not quitServer do
                         body = json.encode({
                             message = "Job completed"
                         })
+                    elseif data.func == "AddSilenceMarkers" then
+                        print("[AutoSubs Server] Adding silence markers...")
+                        local timeline = project:GetCurrentTimeline()
+                        local timelineStart = timeline:GetStartFrame()
+                        local markInOut = timeline:GetMarkInOut()
+                        -- Use markIn passed from the frontend if available, otherwise calculate
+                        local markIn = data.markIn or ((markInOut.audio["in"] and markInOut.audio["in"] + timelineStart) or timelineStart)
+                        
+                        -- Expect nonSpeechSegments data directly in the request
+                        if data.nonSpeechSegments then
+                            local added = AddSilenceMarkers(data.nonSpeechSegments, markIn)
+                            body = json.encode({
+                                message = added and "Silence markers added" or "Failed to add silence markers"
+                            })
+                        else
+                            print("[AutoSubs Server] Error: nonSpeechSegments data missing in request.")
+                            body = json.encode({
+                                message = "Error: Missing silence segment data"
+                            })
+                        end
                     elseif data.func == "Exit" then
                         body = json.encode({
                             message = "Server shutting down"

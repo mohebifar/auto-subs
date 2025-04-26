@@ -186,8 +186,7 @@ def is_model_accessible(model_id, token=None, revision=None):
         return False
     except HfHubHTTPError as e:
         if e.response.status_code == 403:
-            print(f"Access denied to model '{
-                  model_id}'. You may need to accept the model's terms or provide a valid token.")
+            print(f"Access denied to model '{model_id}'. You may need to accept the model's terms or provide a valid token.")
         elif e.response.status_code == 401:
             print(f"Unauthorized access. Please check your Hugging Face access token.")
         else:
@@ -300,8 +299,7 @@ def merge_diarisation(transcript, diarization):
             j += 1
         else:
             # Overlapping segment
-            speaker_label = f"Speaker {
-                speaker_counter}" if speaker not in speakers_info else speakers_info[speaker]["label"]
+            speaker_label = f"Speaker {speaker_counter}" if speaker not in speakers_info else speakers_info[speaker]["label"]
             new_segment = {
                 "start": segment_start,
                 "end": segment_end,
@@ -616,30 +614,54 @@ async def transcribe(request: TranscriptionRequest):
             detail=f"Unexpected error: {e}"
         )
     
-# class SpeechSegmentsRequest(BaseModel):
-#     audio_file: str
+from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
 
-# @app.post("/non_speech_segments/")
-# async def get_speech_segments(request: SpeechSegmentsRequest):
-#     from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
-#     model = load_silero_vad()
-#     wav = read_audio(request.audio_file)
-#     speech_timestamps = get_speech_timestamps(
-#         wav,
-#         model,
-#         return_seconds=True,  # Return speech timestamps in seconds (default is samples)
-#     )
+class SpeechSegmentsRequest(BaseModel):
+    audio_file: str
 
-#     # Calculate non-speech segments
-#     non_speech_timestamps = []
-#     prev_end = 0
-#     for segment in speech_timestamps:
-#         start, end = segment['start'], segment['end']
-#         if start > prev_end:
-#             non_speech_timestamps.append({'start': prev_end, 'end': start})
-#         prev_end = end
+@app.post("/non_speech_segments/")
+async def get_non_speech_segments(request: SpeechSegmentsRequest):
+    model = load_silero_vad()
+    wav = read_audio(request.audio_file, sampling_rate=16000) # Ensure 16kHz for silero-vad
+    speech_timestamps = get_speech_timestamps(
+        wav,
+        model,
+        sampling_rate=16000,
+        return_seconds=True,  # Return speech timestamps in seconds (default is samples)
+    )
+
+    # Calculate non-speech segments
+    non_speech_timestamps = []
+    prev_end = 0
+    # Assuming the audio file duration can be obtained or approximated
+    total_duration = len(wav) / 16000  # Duration in seconds
+    min_silence_duration = 0.5  # Minimum silence duration in seconds
+    padding = 0.5  # Padding in seconds to add to each end of speech (reducing silence)
+
+    for segment in speech_timestamps:
+        start, end = segment['start'], segment['end']
+        # Check if there's a gap between speech segments
+        if start > prev_end:
+            # Calculate silence with padding (reducing silence by padding on both ends)
+            silence_start = prev_end + padding
+            silence_end = start - padding
+            
+            # Only add if we still have a valid silence segment after padding
+            if silence_end > silence_start:
+                non_speech_timestamps.append({'start': silence_start, 'end': silence_end})
+        prev_end = end
     
-#     return non_speech_timestamps
+    # Add final non-speech segment if exists
+    if total_duration > prev_end:
+        silence_start = prev_end + padding
+        silence_end = total_duration
+        
+        # Only add if we still have a valid silence segment after padding
+        if silence_end > silence_start:
+            non_speech_timestamps.append({'start': silence_start, 'end': silence_end})
+    
+    print(f"Non-speech segments: {non_speech_timestamps}")
+    return non_speech_timestamps
 
 class ModifyRequest(BaseModel):
     file_path: str
